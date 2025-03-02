@@ -113,11 +113,18 @@ class PortfolioEnv(gymnasium.Env):
         obs_list = []
         for ticker in self.tickers:
             df = self.data[ticker]
+            df.dropna(inplace=True)
             row = df.iloc[self.current_step].values.astype(np.float32)
             obs_list.extend(row)
         # Append portfolio state: balance and holdings
-        holdings_arr = np.array([self.holdings[ticker] for ticker in self.tickers], dtype=np.float32)
-        obs = np.concatenate([np.array([self.balance], dtype=np.float32), holdings_arr, np.array(obs_list)])
+        balance_arr = np.array([self.balance], dtype=np.float32).flatten()  # Ensure it's 1D
+        holdings_arr = np.array([self.holdings[ticker] for ticker in self.tickers], dtype=np.float32).flatten()
+        obs_list_arr = np.array(obs_list, dtype=np.float32).flatten()
+
+        # Concatenate properly
+        obs = np.concatenate([balance_arr, holdings_arr, obs_list_arr])
+
+
         return obs
 
     def step(self, action):
@@ -128,7 +135,7 @@ class PortfolioEnv(gymnasium.Env):
         prices = {}
         for ticker in self.tickers:
             df = self.data[ticker]
-            price = df.iloc[self.current_step]['Close']
+            price = df.iloc[self.current_step]['Close'].values
             prices[ticker] = price
 
         # Process the action for each ticker
@@ -138,7 +145,7 @@ class PortfolioEnv(gymnasium.Env):
             if act > 0:  # Buy action
                 # Use fraction 'act' of available cash to buy shares
                 available_cash = self.balance
-                order_value = available_cash * act
+                order_value = ((available_cash // price) * act) * price
                 shares_to_buy = int(order_value // price)
                 cost = shares_to_buy * price
                 if shares_to_buy > 0 and cost[0] <= self.balance:
@@ -172,7 +179,7 @@ class PortfolioEnv(gymnasium.Env):
         done = self.current_step >= self.n_steps
 
         obs = self._get_observation() if not done else np.zeros(self.observation_space.shape, dtype=np.float32)
-        return obs, reward, done, {}
+        return obs, float(reward), done, done, {}
 
     def reset(self,seed:int=0):
         self.balance = self.initial_balance
@@ -191,7 +198,7 @@ class PortfolioEnv(gymnasium.Env):
 # Create the Environment and Check It
 # ---------------------------
 tickers = ['AAPL', 'MSFT', 'GOOGL']  # Example tickers; adjust as needed.
-env = PortfolioEnv(tickers=tickers, start_date='2023-01-01', end_date='2024-01-01')
+env = PortfolioEnv(tickers=tickers, start_date='2023-01-01', end_date='2023-06-01', initial_balance=100)
 check_env(env, warn=True)
 
 # ---------------------------
@@ -209,13 +216,13 @@ model.learn(total_timesteps=10000)
 # ---------------------------
 # Backtest the Trained Bot over the 1-Year Data
 # ---------------------------
-obs = env.reset()
+obs, _ = env.reset()  # Unpack the tuple (obs, info)
 done = False
 
 while not done:
     # Predict action using the trained model
     action, _states = model.predict(obs)
-    obs, reward, done, info = env.step(action)
+    obs, reward, done,truncated, info = env.step(action)
 
 # Plot the portfolio value over time
 plt.figure(figsize=(10, 6))
