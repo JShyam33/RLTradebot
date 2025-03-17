@@ -5,9 +5,11 @@ import yfinance as yf
 import matplotlib.pyplot as plt
 from gymnasium import spaces
 from stable_baselines3 import PPO
+from stable_baselines3.common.distributions import DiagGaussianDistribution
 from stable_baselines3.common.env_checker import check_env
 import torch as th
 import torch.nn as nn
+from stable_baselines3.common.policies import ActorCriticPolicy
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 
 # ---------------------------
@@ -31,6 +33,72 @@ class CustomExtractor(BaseFeaturesExtractor):
 
     def forward(self, observations: th.Tensor) -> th.Tensor:
         return self.net(observations)
+
+
+class CustomActorCriticPolicy(ActorCriticPolicy):
+    """
+    Custom ActorCriticPolicy with separate actor and critic networks.
+
+    Parameters:
+        actor_net_arch (list): Hidden layer sizes for the actor network.
+        critic_net_arch (list): Hidden layer sizes for the critic network.
+    """
+
+    def __init__(self, *args, actor_net_arch=[64, 64], critic_net_arch=[64, 64], **kwargs):
+        # Call the parent constructor. It sets up the feature extractor and the action distribution.
+        super(CustomActorCriticPolicy, self).__init__(*args, **kwargs)
+
+        # Get the dimensionality of the features extracted from the observation.
+        feature_dim = self.features_extractor.features_dim
+
+        # Build the actor network from the extracted features.
+        actor_layers = []
+        input_dim = feature_dim
+        for hidden_size in actor_net_arch:
+            actor_layers.append(nn.Linear(input_dim, hidden_size))
+            actor_layers.append(nn.ReLU())
+            input_dim = hidden_size
+        self.actor_net = nn.Sequential(*actor_layers)
+
+        # Build the critic network from the extracted features.
+        critic_layers = []
+        input_dim = feature_dim
+        for hidden_size in critic_net_arch:
+            critic_layers.append(nn.Linear(input_dim, hidden_size))
+            critic_layers.append(nn.ReLU())
+            input_dim = hidden_size
+        self.critic_net = nn.Sequential(*critic_layers)
+
+        # Final layers: one that maps the actor network's output to the action space,
+        # and one that maps the critic network's output to a single state value.
+        self.action_net = nn.Linear(actor_net_arch[-1], self.action_space.shape[0])
+        self.value_net = nn.Linear(critic_net_arch[-1], 1)
+
+        # For continuous action spaces, register a learnable log standard deviation parameter.
+        # (This is used by the DiagGaussianDistribution.)
+        self.log_std = nn.Parameter(th.ones(self.action_space.shape[0]) * -0.5)
+
+        # Initialize weights if desired (optional)
+        self._initialize_weights()
+
+        self.action_dist = DiagGaussianDistribution(self.action_space.shape[0])
+
+    def _initialize_weights(self):
+        # A simple weight initialization using orthogonal initialization.
+        for m in [self.actor_net, self.critic_net, self.action_net, self.value_net]:
+            for layer in m.modules():
+                if isinstance(layer, nn.Linear):
+                    nn.init.orthogonal_(layer.weight)
+                    if layer.bias is not None:
+                        layer.bias.data.fill_(0.0)
+
+
+
+    def _predict(self, observation, deterministic=False):
+        # The _predict method is used during inference.
+        actions, _, _ = self.forward(observation, deterministic)
+        return actions
+
 
 # ---------------------------
 # Custom Portfolio Environment
@@ -286,21 +354,97 @@ check_env(env, warn=True)
 # Set up PPO with the Custom Actor-Critic Network
 # ---------------------------
 policy_kwargs = dict(
+    actor_net_arch=[256, 128, 64],               # Define hidden layers for the actor network
+    critic_net_arch=[128, 64, 64],              # Define hidden layers for the critic network
     features_extractor_class=CustomExtractor,
-    features_extractor_kwargs=dict(features_dim=128),
+    features_extractor_kwargs=dict(features_dim=256),
 )
 
-model = PPO("MlpPolicy", env, policy_kwargs=policy_kwargs, verbose=1)
+model = PPO(CustomActorCriticPolicy, env, policy_kwargs=policy_kwargs, verbose=1,n_epochs=50,batch_size=128)
 # Train for a number of timesteps (adjust timesteps as necessary)
 model.learn(total_timesteps=10000)
 
 # ---------------------------
-# Backtest the Trained Bot over the Simulation Period
+# Define alternative strategies for backtesting:
+# 1. Rule-Based Strategy (using moving average crossover)
+# 2. Random Strategy (actions sampled uniformly)
 # ---------------------------
+def rule_based_policy(obs, n_assets):
+    """
+    Use MA5 and MA10 from the engineered features to decide:
+      - If MA5 > MA10: Buy (action=1)
+      - If MA5 < MA10: Sell (action=-1)
+      - Otherwise: Hold (action=0)
+    Note: The observation consists of [balance, holdings, features_for_each_ticker]
+    where each ticker has 10 features and MA5, MA10 are at positions 5 and 6.
+    """
+    # Skip portfolio state (first 1+n_assets elements)
+    features = obs[(1 + n_assets):]
+    action = []
+    for i in range(n_assets):
+        ticker_features = features[i * 10:(i + 1) * 10]
+        ma5 = ticker_features[5]
+        ma10 = ticker_features[6]
+        if ma5 > ma10:
+            action.append(1.0)
+        elif ma5 < ma10:
+            action.append(-1.0)
+        else:
+            action.append(0.0)
+    return np.array(action, dtype=np.float32)
 
-test_tickers = ['AMZN','META', 'NFLX']
+def run_simulation(env, strategy, n_assets, model=None):
+    """
+    Run the simulation for the given environment using:
+      - 'RL' strategy: use the PPO model to predict actions.
+      - 'Rule-Based' strategy: use the rule_based_policy.
+      - 'Random' strategy: sample actions randomly.
+    """
+    obs, _ = env.reset()
+    done = False
+    while not done:
+        if strategy == "RL":
+            action, _ = model.predict(obs)
+        elif strategy == "Rule-Based":
+            action = rule_based_policy(obs, n_assets)
+        elif strategy == "Random":
+            action = np.random.uniform(low=-1, high=1, size=(n_assets,))
+        else:
+            action = np.zeros(n_assets)
+        obs, reward, done, truncated, info = env.step(action)
+    return env.portfolio_history
 
-test_env = PortfolioEnv(
+# ---------------------------
+# Create test environments for all strategies over the same period
+# ---------------------------
+test_tickers = ['AMZN', 'META', 'NFLX']
+env_rl = PortfolioEnv(
+    tickers=test_tickers,
+    start_date='2023-01-01',
+    end_date='2023-06-01',
+    initial_balance=10000,
+    trade_fee_percentage=0.001,
+    max_shares_per_trade=50,
+    max_shares_per_ticker=200,
+    drawdown_limit=0.2,
+    drawdown_penalty_factor=0.5,
+    reward_factor=5,
+    rebalance_period=5
+)
+env_rule = PortfolioEnv(
+    tickers=test_tickers,
+    start_date='2023-01-01',
+    end_date='2023-06-01',
+    initial_balance=10000,
+    trade_fee_percentage=0.001,
+    max_shares_per_trade=50,
+    max_shares_per_ticker=200,
+    drawdown_limit=0.2,
+    drawdown_penalty_factor=0.5,
+    reward_factor=5,
+    rebalance_period=5
+)
+env_random = PortfolioEnv(
     tickers=test_tickers,
     start_date='2023-01-01',
     end_date='2023-06-01',
@@ -314,20 +458,21 @@ test_env = PortfolioEnv(
     rebalance_period=5
 )
 
+n_assets = len(test_tickers)
+portfolio_history_rl = run_simulation(env_rl, "RL", n_assets, model=model)
+portfolio_history_rule = run_simulation(env_rule, "Rule-Based", n_assets)
+portfolio_history_random = run_simulation(env_random, "Random", n_assets)
 
-obs, _ = test_env.reset()  # Unpack the tuple (obs, info)
-done = False
-
-while not done:
-    # Predict action using the trained model
-    action, _states = model.predict(obs)
-    obs, reward, done, truncated, info = test_env.step(action)
-
-# Plot the portfolio value over time
-plt.figure(figsize=(10, 6))
-plt.plot(test_env.portfolio_history)
-plt.title("Portfolio Value Over Time")
+# ---------------------------
+# Plot the portfolio values over time for all three strategies
+# ---------------------------
+plt.figure(figsize=(12, 8))
+plt.plot(portfolio_history_rl, label="RL Strategy")
+plt.plot(portfolio_history_rule, label="Rule-Based Strategy")
+plt.plot(portfolio_history_random, label="Random Strategy")
+plt.title("Comparison of Trading Strategies: Portfolio Value Over Time")
 plt.xlabel("Time Step (Days)")
 plt.ylabel("Portfolio Value ($)")
+plt.legend()
 plt.grid(True)
 plt.show()
