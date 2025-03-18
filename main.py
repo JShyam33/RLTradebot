@@ -1,3 +1,5 @@
+import os
+
 import gymnasium
 import numpy as np
 import pandas as pd
@@ -47,6 +49,8 @@ class CustomActorCriticPolicy(ActorCriticPolicy):
     def __init__(self, *args, actor_net_arch=[64, 64], critic_net_arch=[64, 64], **kwargs):
         # Call the parent constructor. It sets up the feature extractor and the action distribution.
         super(CustomActorCriticPolicy, self).__init__(*args, **kwargs)
+
+
 
         # Get the dimensionality of the features extracted from the observation.
         feature_dim = self.features_extractor.features_dim
@@ -334,7 +338,7 @@ class PortfolioEnv(gymnasium.Env):
 # ---------------------------
 # Create the Environment and Check It
 # ---------------------------
-tickers = ['AAPL', 'MSFT', 'GOOGL']  # Example tickers; adjust as needed.
+tickers = ['TSLA', 'GME', 'NVDA']  # Example tickers; adjust as needed.
 env = PortfolioEnv(
     tickers=tickers,
     start_date='2023-01-01',
@@ -354,15 +358,43 @@ check_env(env, warn=True)
 # Set up PPO with the Custom Actor-Critic Network
 # ---------------------------
 policy_kwargs = dict(
-    actor_net_arch=[256, 128, 64],               # Define hidden layers for the actor network
-    critic_net_arch=[128, 64, 64],              # Define hidden layers for the critic network
+actor_net_arch= [128,1024,512,256, 128],
+    critic_net_arch = [256,512,256, 128],
+    net_arch=[dict(pi=[128,1024,512,256, 128], vf=[256,512,256, 128])],
     features_extractor_class=CustomExtractor,
-    features_extractor_kwargs=dict(features_dim=256),
+    features_extractor_kwargs=dict(features_dim=128),
 )
 
-model = PPO(CustomActorCriticPolicy, env, policy_kwargs=policy_kwargs, verbose=1,n_epochs=50,batch_size=128)
-# Train for a number of timesteps (adjust timesteps as necessary)
-model.learn(total_timesteps=10000)
+MODEL_PATH = "ppo_trading_model.zip"
+
+def get_model(env):
+    """
+    Load an existing model if available, otherwise create a new one.
+    """
+    if os.path.exists(MODEL_PATH):
+        print("Loading existing model...")
+        model = PPO.load(MODEL_PATH, env=env, device="cuda")
+    else:
+        print("No existing model found. Creating new model...")
+        model = PPO(CustomActorCriticPolicy, env, policy_kwargs=policy_kwargs, verbose=1,n_epochs=30, device="cuda",batch_size=128)
+        # Train for a number of timesteps (adjust timesteps as necessary)
+        model.learn(total_timesteps=10000)
+
+    return model
+
+
+def save_model(model):
+    """
+    Save the trained model.
+    """
+    print("Saving model...")
+    model.save(MODEL_PATH)
+
+
+
+model = get_model(env)
+
+
 
 # ---------------------------
 # Define alternative strategies for backtesting:
@@ -408,7 +440,10 @@ def run_simulation(env, strategy, n_assets, model=None):
         elif strategy == "Rule-Based":
             action = rule_based_policy(obs, n_assets)
         elif strategy == "Random":
-            action = np.random.uniform(low=-1, high=1, size=(n_assets,))
+            action = np.zeros(n_assets)  # Default action is 0 (no action)
+            for i in range(n_assets):
+                if np.random.randint(0, 100) > 20:  # 50% probability to take action
+                    action[i] = np.random.uniform(-1, 1)  # Buy or hold randomly
         else:
             action = np.zeros(n_assets)
         obs, reward, done, truncated, info = env.step(action)
@@ -417,37 +452,13 @@ def run_simulation(env, strategy, n_assets, model=None):
 # ---------------------------
 # Create test environments for all strategies over the same period
 # ---------------------------
-test_tickers = ['AMZN', 'META', 'NFLX']
-env_rl = PortfolioEnv(
+test_tickers = ['TSLA', 'GME', 'NVDA']
+start_date = '2024-01-01'
+end_date = '2024-06-01'
+env_test = PortfolioEnv(
     tickers=test_tickers,
-    start_date='2023-01-01',
-    end_date='2023-06-01',
-    initial_balance=10000,
-    trade_fee_percentage=0.001,
-    max_shares_per_trade=50,
-    max_shares_per_ticker=200,
-    drawdown_limit=0.2,
-    drawdown_penalty_factor=0.5,
-    reward_factor=5,
-    rebalance_period=-1
-)
-env_rule = PortfolioEnv(
-    tickers=test_tickers,
-    start_date='2023-01-01',
-    end_date='2023-06-01',
-    initial_balance=10000,
-    trade_fee_percentage=0.001,
-    max_shares_per_trade=50,
-    max_shares_per_ticker=200,
-    drawdown_limit=0.2,
-    drawdown_penalty_factor=0.5,
-    reward_factor=5,
-    rebalance_period=-1
-)
-env_random = PortfolioEnv(
-    tickers=test_tickers,
-    start_date='2023-01-01',
-    end_date='2023-06-01',
+    start_date=start_date,
+    end_date=end_date,
     initial_balance=10000,
     trade_fee_percentage=0.001,
     max_shares_per_trade=50,
@@ -458,21 +469,65 @@ env_random = PortfolioEnv(
     rebalance_period=-1
 )
 
+
 n_assets = len(test_tickers)
-portfolio_history_rl = run_simulation(env_rl, "RL", n_assets, model=model)
-portfolio_history_rule = run_simulation(env_rule, "Rule-Based", n_assets)
-portfolio_history_random = run_simulation(env_random, "Random", n_assets)
+portfolio_history_rl = run_simulation(env_test, "RL", n_assets, model=model)
+env_test.reset()
+portfolio_history_rule = run_simulation(env_test, "Rule-Based", n_assets)
+env_test.reset()
+portfolio_history_random = run_simulation(env_test, "Random", n_assets)
 
 # ---------------------------
 # Plot the portfolio values over time for all three strategies
 # ---------------------------
+
+
+# Draw dashed horizontal lines at the final values
+final_rl = portfolio_history_rl[-1].item()
+final_rule = portfolio_history_rule[-1].item()
+final_random = portfolio_history_random[-1].item()
+
+
+
+
 plt.figure(figsize=(12, 8))
+
 plt.plot(portfolio_history_rl, label="RL Strategy")
 plt.plot(portfolio_history_rule, label="Rule-Based Strategy")
 plt.plot(portfolio_history_random, label="Random Strategy")
-plt.title("Comparison of Trading Strategies: Portfolio Value Over Time")
+
+x_pad , y_pad = 5,5
+
+# Add final point and label for RL Strategy
+x_rl = len(portfolio_history_rl) - 1
+y_rl = portfolio_history_rl[-1].item()
+plt.plot(x_rl, y_rl, marker='o', color='#1D66B6')
+plt.text(x_rl + x_pad, y_rl + y_pad, f"{y_rl:.2f}", color='#1D66B6', va='bottom', ha='center')
+
+# Add final point and label for Rule-Based Strategy
+x_rule = len(portfolio_history_rule) - 1
+y_rule = portfolio_history_rule[-1].item()
+plt.plot(x_rule, y_rule, marker='o', color='orange')
+plt.text(x_rule + x_pad, y_rule + y_pad, f"{y_rule:.2f}", color='orange', va='bottom', ha='center')
+
+# Add final point and label for Random Strategy
+x_random = len(portfolio_history_random) - 1
+y_random = portfolio_history_random[-1].item()
+plt.plot(x_random, y_random, marker='o', color='green')
+plt.text(x_random + x_pad, y_random + y_pad, f"{y_random:.2f}", color='green', va='bottom', ha='center')
+
+
+plt.title(
+    "Comparison of Trading Strategies: Portfolio Value Over Time\n"
+    f"Tickers: {test_tickers} | Date Range: {start_date} - {end_date}"
+)
+
 plt.xlabel("Time Step (Days)")
 plt.ylabel("Portfolio Value ($)")
 plt.legend()
 plt.grid(True)
 plt.show()
+plt.savefig("portfolio.png")
+#Save model
+
+save_model(model)
