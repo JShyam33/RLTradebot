@@ -346,7 +346,7 @@ env = PortfolioEnv(
     drawdown_limit=0.2,
     drawdown_penalty_factor=0.3,
     reward_factor=5,
-    rebalance_period=5
+    rebalance_period=-1
 )
 check_env(env, warn=True)
 
@@ -429,7 +429,7 @@ env_rl = PortfolioEnv(
     drawdown_limit=0.2,
     drawdown_penalty_factor=0.5,
     reward_factor=5,
-    rebalance_period=5
+    rebalance_period=-1
 )
 env_rule = PortfolioEnv(
     tickers=test_tickers,
@@ -442,7 +442,7 @@ env_rule = PortfolioEnv(
     drawdown_limit=0.2,
     drawdown_penalty_factor=0.5,
     reward_factor=5,
-    rebalance_period=5
+    rebalance_period=-1
 )
 env_random = PortfolioEnv(
     tickers=test_tickers,
@@ -455,7 +455,7 @@ env_random = PortfolioEnv(
     drawdown_limit=0.2,
     drawdown_penalty_factor=0.5,
     reward_factor=5,
-    rebalance_period=5
+    rebalance_period=-1
 )
 
 n_assets = len(test_tickers)
