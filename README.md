@@ -146,10 +146,27 @@ The PPO model is defined using Stable Baselines3 with the following customizatio
 
 ## Backtesting and Visualization
 
-Once the simulation loop ends, the script:
+The trained RL agent is evaluated against two benchmark strategies:
 
-- Records the portfolio value over each timestep.
-- Uses matplotlib to plot the portfolio’s value trajectory, providing visual insight into the agent’s performance throughout the trading period.
+1. **Rule-Based Strategy (Moving Average Crossover):**
+   - Uses technical indicators to make trading decisions
+   - Trading rules:
+     - If 5-day moving average (MA5) > 10-day moving average (MA10): Buy (action=1)
+     - If MA5 < MA10: Sell (action=-1)
+     - Otherwise: Hold (action=0)
+   - This strategy represents a common technical analysis approach used by traders
+
+2. **Random Strategy:**
+   - Takes random actions with an 80% probability of trading (20% probability of holding)
+   - When trading, actions are sampled uniformly from the range [-1, 1]
+   - Serves as a baseline to demonstrate that the RL strategy performs better than random decisions
+
+The performance of all three strategies (RL, Rule-Based, and Random) is visualized in a single plot showing portfolio value over time. This comparison demonstrates the effectiveness of the RL approach against traditional and random strategies.
+
+Once the simulation loop ends, the script:
+- Records the portfolio value over each timestep for all three strategies
+- Plots the portfolio trajectories with final values labeled
+- Visualizes the comparative performance to evaluate the RL agent's effectiveness
 
 ## Usage
 
