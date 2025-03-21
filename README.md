@@ -7,6 +7,7 @@ This project demonstrates the use of reinforcement learning (RL) to manage a sto
 - [Overview](#overview)
 - [Project Structure](#project-structure)
 - [Environment Setup](#environment-setup)
+- [Environment Parameters and Trading Constraints](#environment-parameters-and-trading-constraints)
 - [Data Preparation and Feature Engineering](#data-preparation-and-feature-engineering)
 - [Model Definition](#model-definition)
 - [Training and RL Simulation Loop](#training-and-rl-simulation-loop)
@@ -53,6 +54,46 @@ Install the required packages using pip:
 ```bash
 pip install gymnasium numpy pandas yfinance matplotlib stable-baselines3 torch
 ```
+
+## Environment Parameters and Trading Constraints
+
+The `PortfolioEnv` environment includes several configurable parameters to simulate realistic trading scenarios. Below are details on key variables and their impact:
+
+**Trading Constraints**
+
+1. **Trade Fees** (`trade_fee_percentage`)
+   - A transaction fee is applied to both buy and sell actions.
+   - Example: If `trade_fee_percentage = 0.001` (0.1%), buying 10,000 of shares incurs a 10 fee. Selling the same amount deducts $10 from the revenue.
+   - Fees reduce the available cash balance and discourage excessive trading.
+
+2. **Maximum shares per Trade** (`max_shares_per_trade`)
+   - Limits the number of shares that can be bought or sold in a single transaction.
+   - Example: If `max_shares_per_trade = 50`, the agent cannot trade more than 50 shares of any ticker per step.
+   - Prevents large, market-impacting trades and encourages incremental position adjustments.
+
+3. **Maximum Shares per Ticker** (`max_shares_per_ticker`)
+   - Caps the total number of shares the agent can hold for any single ticker.
+   - Example: If `max_shares_per_ticker = 200`, the agent cannot hold more than 200 shares of a single stock at any time.
+   - Mitigates over-concentration risk in a single asset.
+
+**Risk Management**
+
+4. **Drawdown Penalty** (`drawdown_limit`, `drawdown_penalty_factor`)
+   - **Drawdown Limit**: If the portfolio value falls below a specified percentage of its peak value (`drawdown_limit`), a penalty is applied. 
+
+      Example: A `drawdown_limit = 0.2` triggers a penalty if the portfolio drops 20% below its peak.
+   - **Penalty Factor**: The penalty scales with the severity of the drawdown. For instance, a `drawdown_penalty_factor = 0.5` reduces the reward by `(drawdown - drawdown_limit) * portfolio_value * 0.5`.
+   - Encourages the agent to prioritize capital preservation during downturns.
+
+**Portfolio Rebalancing**
+
+5. **Rebalancing Period** (`rebalance_period`)
+   - At fixed intervals (e.g., every 5 days if `rebalance_period = 5`), the portfolio is rebalanced to a target allocation of 80% equities (evenly distributed across tickers) and 20% cash.
+   - **Process:**
+     - **Selling Over-Allocated Assets**: If a ticker’s equity value exceeds its target allocation, excess shares are sold.
+     - **Buying Under-Allocated Assets**: If a ticker’s equity value is below target, shares are purchased using cash reserves above the 20% target.
+   - Ensures disciplined risk management and reduces drift from the target allocation.
+   - Rebalancing respects trading constraints (fees, max shares per trade/ticker).
 
 ## Data Preparation and Feature Engineering
 
@@ -111,8 +152,37 @@ Once the simulation loop ends, the script:
 - Uses matplotlib to plot the portfolio’s value trajectory, providing visual insight into the agent’s performance throughout the trading period.
 
 ## Usage
-To run the script:
 
-1. Configure the parameters (tickers, date ranges, trading constraints) as needed.
-2. Execute the script in your Python environment.
-3. The script will train the PPO model, perform backtesting, and display a plot of the portfolio value over time.
+### Basic Execution
+
+1. Install the required dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+2. Run the main script:
+   ```bash
+   python main.py
+   ```
+
+### Configuring Trading Parameters
+
+To customize the trading environment, modify the following parameters in `main.py`:
+
+#### Training Environment
+```python
+tickers = ['TSLA', 'GME', 'NVDA']  # Stocks to include in portfolio
+env = PortfolioEnv(
+    tickers=tickers,
+    start_date='2023-01-01',       # Training data start date
+    end_date='2024-01-01',         # Training data end date
+    initial_balance=10000,         # Starting cash
+    trade_fee_percentage=0.001,    # 0.1% transaction fee
+    max_shares_per_trade=50,       # Maximum shares per transaction
+    max_shares_per_ticker=200,     # Maximum position size
+    drawdown_limit=0.2,            # 20% drawdown limit
+    drawdown_penalty_factor=0.3,   # Penalty scaling factor
+    reward_factor=5,               # Reward scaling factor
+    rebalance_period=-1            # Disable automatic rebalancing
+)
+```
