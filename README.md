@@ -10,7 +10,7 @@ This project demonstrates the use of reinforcement learning (RL) to manage a sto
 - [Environment Parameters and Trading Constraints](#environment-parameters-and-trading-constraints)
 - [Data Preparation and Feature Engineering](#data-preparation-and-feature-engineering)
 - [Model Definition](#model-definition)
-- [Training and RL Simulation Loop](#training-and-rl-simulation-loop)
+- [Training and Environment step function](#training-and-environment-step-function)
 - [Backtesting and Visualization](#backtesting-and-visualization)
 - [Usage](#usage)
 
@@ -25,7 +25,7 @@ This repository contains a Python script that:
 ## Project Structure
 
 - **Custom Feature Extractor:**  
-  Implements a fully connected network (two linear layers with ReLU activations) that reduces the raw observation space into a 128-dimensional feature vector for the PPO model.
+  Implements a fully connected network (five linear layers with ReLU activations) that reduces the raw observation space into a 128-dimensional feature vector for the PPO model.
 
 - **Custom Portfolio Environment (`PortfolioEnv`):**  
   - Downloads historical stock data for provided tickers within a specified date range.
@@ -111,38 +111,147 @@ These features are combined with the current portfolio state (balance and holdin
 
 The PPO model is defined using Stable Baselines3 with the following customizations:
 
-- Custom Feature Extractor (`CustomExtractor`):
-
-    A PyTorch neural network with:
+- Custom Actor Critic Policy (`CustomActorCriticPolicy`):
+ 
+    A PyTorch neural network for feature extraction with:
     - An input layer matching the observation space dimensions.
-    - Two fully connected layers with ReLU activations.
+    - An output feature dimension of 128.    
+
+    A PyTorch neural network for actor with:
+    - An input layer matching the observation space dimensions.
+    - three fully connected layers with ReLU activations.
     - An output feature dimension of 128.
+  
+    A PyTorch neural network for critic with:
+    - An input layer matching the observation space dimensions.
+    - two fully connected layers with ReLU activations.
+    - An output feature dimension of 1.
 
 - Policy Keyword Arguments:
     
     The PPO model is configured to use the custom feature extractor, which improves the processing of raw observations from the environment.
 
-## Training and RL Simulation Loop
+### Training and Environment step function
 
-1. Environment Initialization:
-    
-    The `PortfolioEnv` is instantiated with parameters such as tickers, date range, initial balance, trading fee, maximum shares per trade/ticker, drawdown constraints, and a rebalance period.
+#### Proximal Policy Optimization (PPO) Overview
 
-2. Environment Validation:
-    
-    The environment is validated using `check_env` from Stable Baselines3 to ensure compliance with Gymnasium’s API.
+PPO is an on-policy actor-critic algorithm designed to provide stable and efficient learning by optimizing a clipped surrogate objective. Key details include:
 
-3. Model Training:
-    
-    The PPO model is trained for 10,000 timesteps, during which the agent learns to balance its portfolio through buy, sell, and hold actions based on market observations.
+- **Clipped Objective:** Prevents excessively large policy updates by clipping the probability ratio between the new and old policies.
+- **Multiple Epochs:** Uses several passes over the same batch of experiences to improve sample efficiency.
+- **Actor-Critic Structure:** Separates the policy network (actor) for decision-making from the value network (critic) for state-value estimation.
+- **Entropy Bonus:** Encourages exploration by adding an entropy term to the loss function, which avoids premature convergence to suboptimal deterministic policies.
 
-4. RL Simulation Loop:
-    
-    After training, the simulation loop is executed in a test environment:
-    - The test environment (with a new set of tickers and a different simulation period) is reset.
-    - At each timestep, the trained model predicts an action based on the current observation.
-    - The environment processes the action, updates the portfolio, and calculates rewards.
-    - This loop continues until the simulation completes.
+Below is an excerpt showing how PPO is configured and trained in this project:
+
+```python
+policy_kwargs = dict(
+actor_net_arch= [128,1024,512,256, 128],
+    critic_net_arch = [256,512,256, 128],
+    net_arch=[dict(pi=[128,1024,512,256, 128], vf=[256,512,256, 128])],
+    features_extractor_class=CustomExtractor,
+    features_extractor_kwargs=dict(features_dim=128),
+)
+model = PPO(CustomActorCriticPolicy, env, policy_kwargs=policy_kwargs, verbose=1,
+            n_epochs=30, device="cuda", batch_size=128)
+model.learn(total_timesteps=10000)
+```
+
+Environment step function
+
+### Detailed Explanation of the Environment `step` Function
+
+The `step` function is the core of the trading simulation. It processes the agent’s actions, updates the portfolio, computes rewards, and advances the simulation. Below is a detailed breakdown:
+
+1. **Action Processing and Clipping**  
+   - The input action (an array with one entry per ticker) is first clipped to the valid range \([-1, 1]\).  
+   - Positive values indicate a buy action, negative values indicate a sell action, and values near zero imply holding the position.
+
+2. **Price Retrieval**  
+   - For each ticker, the current closing price is extracted from the historical data based on the current timestep.
+   - These prices are used to determine the cost or revenue of the transactions.
+```python
+    # Retrieve current prices for each ticker using the Close price
+    prices = {}
+    for ticker in self.tickers:
+        df = self.data[ticker]
+        price = df.iloc[self.current_step]['Close'].values
+        prices[ticker] = price
+```
+
+3. **Trade Execution Logic**  
+   - **Buying:**  
+     - **Desired Shares:** The number of shares to buy is calculated by taking a fraction (given by the action value) of the maximum affordable shares (based on the current balance and price).  
+     - **Limits:** The desired number of shares is capped by both the maximum shares allowed per trade and the maximum shares allowed per ticker.  
+     - **Transaction Cost:** The total cost includes both the purchase cost (price × shares) and the associated trading fee.  
+     - **Portfolio Update:** If there is enough balance, the holdings are increased, and the balance is decreased accordingly.
+     ```python
+            max_affordable_shares = int(self.balance // price)
+            desired_shares = int(max_affordable_shares * act)
+            desired_shares = min(desired_shares, self.max_shares_per_trade)
+            allowed_shares = self.max_shares_per_ticker - self.holdings[ticker]
+            shares_to_buy = min(desired_shares, allowed_shares)
+            cost = shares_to_buy * price
+            fee = cost * self.trade_fee_percentage
+            total_cost = cost + fee
+            if shares_to_buy > 0 and total_cost <= self.balance:
+                self.holdings[ticker] += shares_to_buy
+                self.balance -= total_cost
+        ```
+   - **Selling:**  
+     - **Desired Shares:** A fraction (absolute value of the action) of the currently held shares is considered for sale.  
+     - **Limits:** The sale is capped by the maximum shares allowed per trade and the available holdings.  
+     - **Transaction Revenue:** Revenue is computed, fees are deducted, and the net revenue is added back to the balance after reducing the holdings.
+     ```python
+            desired_shares = int(self.holdings[ticker] * abs(act))
+            desired_shares = min(desired_shares, self.max_shares_per_trade)
+            shares_to_sell = min(desired_shares, self.holdings[ticker])
+            revenue = shares_to_sell * price
+            fee = revenue * self.trade_fee_percentage
+            net_revenue = revenue - fee
+            if shares_to_sell > 0:
+                self.holdings[ticker] -= shares_to_sell
+                self.balance += net_revenue
+        ```
+   - **Hold:**  
+     - When the action is near zero, no trading occurs.
+
+4. **Portfolio Value Calculation and Reward Determination**  
+   - **Portfolio Value:** Computed as the sum of the cash balance and the market value of all held shares.
+   - **Peak Value Update:** The highest portfolio value reached so far is tracked to calculate drawdowns.
+   - **Drawdown & Penalty:**  
+     - Drawdown is the percentage drop from the peak value.  
+     - If the drawdown exceeds a preset limit, a penalty is applied to the reward.
+    ```python 
+     # Compute drawdown and adjust reward if it exceeds the allowed limit
+    drawdown = (self.peak_value - portfolio_value) / self.peak_value
+    reward = (portfolio_value - self.prev_value) * self.reward_factor
+    if drawdown > self.drawdown_limit:
+        penalty = (drawdown - self.drawdown_limit) * portfolio_value * self.drawdown_penalty_factor
+        reward -= penalty
+    ```
+   - **Reward:** The reward is the change in portfolio value (scaled by a reward factor) minus any drawdown penalty.
+
+5. **Periodic Rebalancing (Optional)**  
+   - If enabled (via `rebalance_period`), the portfolio is rebalanced at regular intervals to maintain a target allocation between equities and cash.
+   - After rebalancing, the portfolio value is recalculated.
+
+6. **State Update and Return**  
+   - The portfolio history and current timestep are updated.
+   - A new observation is generated (or a zeroed observation is returned if the simulation is done).
+   - The function returns the new observation, the reward, a done flag (indicating the end of the simulation), and an empty info dictionary.
+
+This function effectively simulates a day's trading by:
+
+- Interpreting and executing the action,
+
+- Updating the portfolio based on market prices and realistic trading constraints,
+
+- Calculating the reward (with risk adjustments), and
+
+- Advancing the simulation state.
+
+
 
 ## Backtesting and Visualization
 
