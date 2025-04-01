@@ -21,6 +21,7 @@ This repository contains a Python script that:
 - **Defines a custom feature extractor:** A simple neural network built with PyTorch processes raw observations into a suitable representation for the PPO agent.
 - **Trains an RL agent:** Using Stable Baselines3’s PPO algorithm, the agent learns optimal trading strategies over multiple timesteps.
 - **Backtests performance:** The trained agent is evaluated on a separate test dataset, and portfolio performance is visualized.
+The solution's constraints, such as trade fees and position limits, are designed to mirror real-world trading, ensuring that the model learns strategies that are both realistic and applicable to actual market conditions.
 
 ## Project Structure
 
@@ -41,15 +42,15 @@ This repository contains a Python script that:
 ## Environment Setup
 
 Ensure you have the following Python libraries installed:
-- gymnasium
-- numpy
-- pandas
-- yfinance
-- matplotlib
-- stable_baselines3
-- torch
+- gymnasium: For creating and interacting with custom environments
+- numpy : For numerical operations
+- pandas : For handling and processing stock data
+- yfinance : For downloading historical stock data
+- matplotlib : For plotting and visualizing portfolio performance
+- stable_baselines3 : For reinforcement learning algorithms like PPO
+- torch : For defining and training neural networks (PyTorch)
 
-Install the required packages using pip:
+Install the required packages mentioned in the requiremnets.txt using pip:
 
 ```bash
 pip install gymnasium numpy pandas yfinance matplotlib stable-baselines3 torch
