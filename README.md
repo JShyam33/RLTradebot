@@ -106,13 +106,14 @@ The environment downloads historical stock data from Yahoo Finance. For each sto
 - Normalized Volume: The ratio of the current volume to its 5-day moving average.
 - Volatility: The rolling standard deviation of returns over a 5-day window.
 
+Features like moving averages and daily returns are standard indicators in technical analysis, helping the agent identify trends and potential price movements. Volatility provides insight into market risk, which aids in making more informed trading decisions.
 These features are combined with the current portfolio state (balance and holdings) to form the observation space provided to the RL agent.
 
 ## Model Definition
 
 The PPO model is defined using Stable Baselines3 with the following customizations:
 
-- Custom Actor Critic Policy (`CustomActorCriticPolicy`):
+- Custom Actor Critic Policy (`CustomActorCriticPolicy`): The Actor-Critic model is effective in trading as it balances action selection (via the actor) and value estimation (via the critic), ensuring stable and efficient learning. 
  
     A PyTorch neural network for feature extraction with:
     - An input layer matching the observation space dimensions.
@@ -142,6 +143,8 @@ PPO is an on-policy actor-critic algorithm designed to provide stable and effici
 - **Multiple Epochs:** Uses several passes over the same batch of experiences to improve sample efficiency.
 - **Actor-Critic Structure:** Separates the policy network (actor) for decision-making from the value network (critic) for state-value estimation.
 - **Entropy Bonus:** Encourages exploration by adding an entropy term to the loss function, which avoids premature convergence to suboptimal deterministic policies.
+
+Note: Clipping in PPO ensures that the agent’s policy updates are not too drastic, maintaining training stability.
 
 Below is an excerpt showing how PPO is configured and trained in this project:
 
